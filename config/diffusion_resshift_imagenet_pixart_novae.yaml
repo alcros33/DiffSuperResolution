@@ -1,26 +1,27 @@
 seed_everything: 4141910080
 trainer:
   accelerator: gpu
+  # _find_unused_parameters_true 
   strategy: ddp
-  devices: 1
   num_nodes: 1
+  devices: 2
   precision: 16-mixed
   logger:
     class_path: lightning.pytorch.loggers.tensorboard.TensorBoardLogger
     init_args:
       save_dir: ./
-      version: resshift_imagenet_default
-  accumulate_grad_batches: 4
+      version: resshift_imagenet_pixart_novae
+  accumulate_grad_batches: 8
   max_epochs: -1
   fast_dev_run: false
   min_epochs: null
   max_steps: 200_000
   min_steps: null
   max_time: null
-  limit_train_batches: null
+  limit_train_batches: 0.5
   limit_val_batches: null
-  limit_test_batches: 20
-  limit_predict_batches: 14
+  limit_test_batches: null
+  limit_predict_batches: null
   overfit_batches: 0.0
   val_check_interval: null
   check_val_every_n_epoch: 1
@@ -29,25 +30,30 @@ trainer:
   enable_checkpointing: true
   enable_progress_bar: false
 model:
-  vae_chkp: xvjiarui/ldm-vq-f4
-  base_channels: 128
-  base_channels_multiples:
-  - 1
-  - 2
-  - 4
-  - 4
-  n_layers: 2
-  n_heads: 4
-  max_vit_attn: False
-  use_cross_attn: False
-  pixel_shuffle: False
-  vae_quantization: True
-  dropout_rate: 0.0
   scale_factor: 4
-  use_scale_shift_norm: False
+
+  n_layers: 16
+  n_heads: 8
+  patch_size: 4
+  use_cross_attn: False
+  window_size: 0
+  input_size: 256
+  input_chs: 3
+  hidden_size: 768
+  scale_factor: 4
+  mlp_ratio: 4.0
+  class_dropout_prob: 0.1
+  drop_path: 0.1
+  window_size: 0
+  window_block_indexes: null
+  use_rel_pos: False
+  cond_channels: 3
+  cond_img_size: 64
+  lewei_scale: 1.0
+  
   timesteps: 15
-  scheduler_type: one_cycle
-  lr: 1e-4
+  scheduler_type: null
+  lr: 8e-5
 data:
   class_path: data.SimpleImageDataModule
   init_args:
@@ -55,9 +61,7 @@ data:
     train_img_list: ../Imagenet/train_filter_256.txt
     valid_img_list: ../Imagenet/val_filter_256.txt
     test_img_list: ../Imagenet/test_filter_256.txt
-    batch_size: 16
+    batch_size: 4
     img_size: 256
-    mean: 0.5
-    std: 0.5
-    do_crop: True
-ckpt_path: checkpoints/resshift_imagenet.ckpt
+    num_workers: 24
+ckpt_path:

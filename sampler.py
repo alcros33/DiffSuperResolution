@@ -56,6 +56,46 @@ class ResShiftDiffusion(nn.Module):
         t = torch.tensor([self.timesteps-1,] * y.shape[0], device=y.device).long()
         return y + self.kappa * get_from_idx(self.sqrt_eta, t) * epsilon
 
+
+class ResShiftDiffusionEps(ResShiftDiffusion):
+    def __init__(self, timesteps=15, p=0.3, kappa=2.0, etas_end=0.99, min_noise_level=0.04):
+        super().__init__(timesteps=timesteps, p=p, kappa=kappa, etas_end=etas_end, min_noise_level=min_noise_level)
+        self.register_buffer("x0_scale", 1.0/(1-self.eta))
+        self.x0_scale[0] = 1.0
+    
+    def backward_step(self, x_t, y_0, predicted_eps, t):
+        sqrt_eta = get_from_idx(self.sqrt_eta, t)
+        eta = get_from_idx(self.eta, t)
+        x0_scale = get_from_idx(self.x0_scale, t)
+
+        predicted_x0 = x0_scale*(x_t - eta*y_0  - self.kappa*sqrt_eta*predicted_eps)
+
+        mean_c1, mean_c2 = get_from_idx(self.backward_mean_c1, t), get_from_idx(self.backward_mean_c2, t)
+        std = get_from_idx(self.backward_std, t)
+
+        mean = mean_c1*x_t + mean_c2*predicted_x0
+
+        return mean + std*torch.randn_like(x_t)
+
+
+class ResShiftDiffusionEpsDumb(ResShiftDiffusion):
+    def __init__(self, timesteps=15, p=0.3, kappa=2.0, etas_end=0.99, min_noise_level=0.04):
+        super().__init__(timesteps=timesteps, p=p, kappa=kappa, etas_end=etas_end, min_noise_level=min_noise_level)
+        self.register_buffer("x0_scale", 1.0/(1-self.eta))
+    
+    def backward_step(self, x_t, y_0, predicted_eps, t):
+        sqrt_eta = get_from_idx(self.sqrt_eta, t)
+        eta = get_from_idx(self.eta, t)
+
+        predicted_x0 = self.x0_scale*(x_t - eta*y_0  - self.kappa*sqrt_eta*predicted_eps)
+
+        mean_c1, mean_c2 = get_from_idx(self.backward_mean_c1, t), get_from_idx(self.backward_mean_c2, t)
+
+        mean = mean_c1*x_t + mean_c2*predicted_x0
+
+        return mean
+
+
 class SimpleDiffusion(nn.Module):
     def __init__(self, timesteps=1000, beta_schedule="linear", beta_start=1e-4, beta_end=2e-2):
         super().__init__()
@@ -85,11 +125,24 @@ class SimpleDiffusion(nn.Module):
                 self.timesteps,
                 dtype=torch.float32) ** 2
 
-    def forward(self, x0: torch.Tensor, timesteps: torch.Tensor):
+    def forward(self, x0: torch.Tensor, timesteps: torch.Tensor, epsilon):
         # Generate normal noise
-        epsilon = torch.randn_like(x0)
         mean    = get_from_idx(self.sqrt_alpha_bar, timesteps) * x0      # Mean
         std_dev = get_from_idx(self.sqrt_one_minus_alpha_bar, timesteps) # Standard deviation
         # Sample is mean plus the scaled noise
         sample  = mean + std_dev * epsilon
-        return sample, epsilon
+        return sample
+    
+    def backward_step(self, xnoise: torch.Tensor, timestep:int, predicted_noise:torch.Tensor):
+        # Noise from normal distribution
+        z  = torch.randn_like(xnoise) if timestep > 0 else torch.zeros_like(xnoise)
+        beta_t                     = self.beta[timestep].reshape(-1, 1, 1, 1)
+        one_by_sqrt_alpha_t        = self.one_by_sqrt_alpha[timestep].reshape(-1, 1, 1, 1)
+        sqrt_one_minus_alpha_bar_t = self.sqrt_one_minus_alpha_bar[timestep].reshape(-1, 1, 1, 1)
+        # Use the formula above to sample a denoised version from the noisy one
+        xdenoised = (
+            one_by_sqrt_alpha_t
+            * (xnoise - (beta_t / sqrt_one_minus_alpha_bar_t) * predicted_noise)
+            + torch.sqrt(beta_t) * z
+        )
+        return xdenoised

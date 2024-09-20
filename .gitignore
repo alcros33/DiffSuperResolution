@@ -160,3 +160,5 @@ results/
 *.pth
 lightning_logs/*
 checkpoints/*
+vae_test_logs/*
+test_imgs/*

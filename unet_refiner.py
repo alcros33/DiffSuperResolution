@@ -26,6 +26,7 @@ class UnetRefiner(L.LightningModule):
                  n_layers=1, dropout_rate=0.0,
                 lr=1e-4, scheduler_type="one_cycle",
                 scale_factor=4,
+                loss_w=[1,0,0,0],
                 n_heads=4):
         super().__init__()
         self.save_hyperparameters()
@@ -65,9 +66,18 @@ class UnetRefiner(L.LightningModule):
             decoder_layers.append(nn.Sequential(*block))
         decoder_layers.append(NACBlock(c_in*2, output_chs, nn.SiLU()))
         self.decoder = nn.ModuleList(decoder_layers)
-        
-        self.psnr = PeakSignalNoiseRatio(data_range=(-1,1))
-        self.ssim =  StructuralSimilarityIndexMeasure(data_range=(-1,1))
+
+        self.metrics = {
+            'psnr' : PeakSignalNoiseRatio(data_range=(-1,1)),
+            'lpips' : LearnedPerceptualImagePatchSimilarity(net_type="vgg"),
+            "ssim":  StructuralSimilarityIndexMeasure(data_range=(-1,1)),
+        }
+        self.lpips = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
+        self.loss_w = loss_w
+    
+    def loss_fn(self, x, xhat):
+        return (F.mse_loss(x,xhat)*self.loss_w[0] + F.l1_loss(x,xhat)*self.loss_w[1]
+                + F.smooth_l1_loss(x,xhat)*self.loss_w[2] + self.lpips(x, xhat.clamp(-1,1))*self.loss_w[3])
     
     def forward(self, x):
         skip = []
@@ -95,13 +105,16 @@ class UnetRefiner(L.LightningModule):
             input = torch.cat([up_low_res, rough_pred, visible], dim=1)
         
         pred = self.forward(input)
-        loss = F.mse_loss(high_res, pred)
+        loss = self.loss_fn(high_res, pred)
         self.log("train_loss", loss)
 
         if self.trainer.is_global_zero and getattr(self, "log_batch_cond", None) is None:
-            if isinstance(self.logger, TensorBoardLogger):
-                self.logger.experiment.add_image("high_res", 
-                                                make_grid(high_res*0.5+0.5, nrow=4),self.global_step)
+            self.logger.experiment.add_image("high_res", 
+                                            make_grid(high_res*0.5+0.5, nrow=4),self.global_step)
+            self.logger.experiment.add_image("bicubic", 
+                                            make_grid(up_low_res.clamp(-1,1)*0.5+0.5, nrow=4),self.global_step)
+            self.logger.experiment.add_image("visible", 
+                                            make_grid(visible*0.5+0.5, nrow=4),self.global_step)
             
             self.log_batch_cond = input.clone().detach()
             self.log_batch_cond.requires_grad_(False)
@@ -147,12 +160,18 @@ class UnetRefiner(L.LightningModule):
             else:
                 low_res, rough_pred, visible, high_res = batch
                 input = torch.cat([up_low_res, rough_pred, visible], dim=1)
-            pred = self.forward(input).clamp(-1, 1)
+            pred = self.forward(input)
+            loss = self.loss_fn(high_res, pred)
+            pred = pred.clamp(-1, 1)
+
+            for k in self.metrics.keys():
+                self.metrics[k].to(pred.device)
             
-            psnr = self.psnr(pred, high_res)
-            ssim = self.ssim(pred, high_res)
+            psnr = self.metrics['psnr'](pred, high_res)
+            ssim = self.metrics['ssim'](pred, high_res)
+            lpips = self.metrics['lpips'](pred, high_res)
             self.log_dict({'valid_psnr':psnr, 'hp_metric':psnr,
-                  'valid_ssim':ssim}, sync_dist=True, on_epoch=True)
+                  'valid_ssim':ssim, 'valid_lpips':lpips, 'valid_loss':loss}, sync_dist=True, on_epoch=True)
 
     def predict_step(self, batch, batch_idx):
         with torch.inference_mode():
@@ -167,7 +186,7 @@ class UnetRefiner(L.LightningModule):
             return pred
 
 def main():
-    checkpoint_callback = ModelCheckpoint(save_top_k=-1, every_n_epochs=5, monitor="hp_metric")
+    checkpoint_callback = ModelCheckpoint(save_top_k=5, every_n_epochs=5, monitor="hp_metric")
     trainer_defaults = dict(enable_checkpointing=True, callbacks=[checkpoint_callback],
                             enable_progress_bar=False, log_every_n_steps=5_000)
     

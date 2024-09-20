@@ -54,10 +54,13 @@ class SinusoidalPositionEmbeddings(nn.Module):
         ts  = torch.arange(total_time_steps, dtype=torch.float32)
 
         emb = torch.unsqueeze(ts, dim=-1) * torch.unsqueeze(emb, dim=0)
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+
+        res = torch.cat((emb, emb), dim=-1)
+        res[:, 0::2] = emb.sin()
+        res[:, 1::2] = emb.cos()
 
         self.time_blocks = nn.Sequential(
-            nn.Embedding.from_pretrained(emb, freeze=True),
+            nn.Embedding.from_pretrained(res, freeze=True),
             nn.Linear(in_features=time_emb_dims, out_features=time_emb_dims_exp),
             nn.SiLU(),
             nn.Linear(in_features=time_emb_dims_exp, out_features=time_emb_dims_exp),
@@ -255,8 +258,6 @@ class UpSamplePixelShuffle(nn.Module):
             nn.Conv2d(in_channels=in_channels, out_channels=in_channels*4,
                       kernel_size=3, stride=1, padding=1),
             nn.PixelShuffle(2),
-            nn.Conv2d(in_channels=in_channels, out_channels=in_channels,
-                      kernel_size=3, stride=1, padding=1),
             )
     def forward(self, x, *args, **kwargs):
         return self.upsample(x)
@@ -288,3 +289,124 @@ class VectorQuantizer(nn.Module):
         z_q = z_in + (quantized - z_in).detach() # Equivalent to "copy gradient"
 
         return z_q, quantized
+
+class WindowedAttention(nn.Module):
+    def __init__(
+        self,
+        dim,
+        dim_head = 32,
+        dropout = 0.,
+        window_size = 7
+    ):
+        super().__init__()
+        assert (dim % dim_head) == 0, 'dimension should be divisible by dimension per head'
+        self.heads = dim // dim_head
+        self.scale = dim_head ** -0.5
+        self.norm = nn.LayerNorm(dim)
+
+        self.to_q = nn.Linear(dim, dim, bias = False)
+        self.to_k = nn.Linear(dim, dim, bias = False)
+        self.to_v = nn.Linear(dim, dim, bias = False)
+
+        self.attend = nn.Sequential(
+            nn.Softmax(dim = -1),
+            nn.Dropout(dropout)
+        )
+        self.to_out = nn.Sequential(
+            nn.Linear(dim, dim, bias = False),
+            nn.Dropout(dropout)
+        )
+
+        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
+        pos = torch.arange(window_size)
+        grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
+        grid = rearrange(grid, 'c i j -> (i j) c')
+        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
+        rel_pos += window_size - 1
+        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
+
+        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
+
+    def forward(self, x, context = None):
+        batch, height, width, window_height, window_width, _, device, h = *x.shape, x.device, self.heads
+
+        x = self.norm(x)
+        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
+        q = self.to_q(x)
+        k = self.to_k(x)
+        v = self.to_v(x)
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v)) # split heads
+
+        q = q * self.scale
+        sim = einsum(q, k, 'b h i d, b h j d -> b h i j') # sim
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        sim = sim + rearrange(bias, 'i j h -> h i j')# add positional bias
+        attn = self.attend(sim) # attention
+        out = einsum(attn, v, 'b h i j, b h j d -> b h i d') # aggregate
+
+        out = rearrange(out, 'b h (w1 w2) d -> b w1 w2 (h d)', w1 = window_height, w2 = window_width) # merge heads
+        out = self.to_out(out) # combine heads out
+        return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
+
+class MaxViTAttention(nn.Module):
+
+    class MLP(nn.Module):
+        def __init__(self, dim, expansion_rate = 4, dropout = 0.0):
+            super().__init__()
+            inner_dim = int(dim * expansion_rate)
+            self.net = nn.Sequential(
+                nn.LayerNorm(dim),
+                nn.Linear(dim, inner_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(inner_dim, dim),
+                nn.Dropout(dropout)
+            )
+        def forward(self, x):
+            return self.net(x)
+    
+    class Residual(nn.Module):
+        def __init__(self, dim, fn):
+            super().__init__()
+            self.norm = nn.LayerNorm(dim)
+            self.fn = fn
+
+        def forward(self, x):
+            return self.fn(self.norm(x)) + x
+
+
+    def __init__(
+        self,
+        channels,
+        heads = 1,
+        window_size = 8,
+        dropout = 0.0,
+    ):
+        super(MaxViTAttention, self).__init__()
+        dim_head = channels // heads
+        w = window_size
+        layer_dim = dim_head * heads
+
+        self.window_block = nn.Sequential(
+            Rearrange('b d (x w1) (y w2) -> b x y w1 w2 d', w1 = w, w2 = w),  # block-like attention
+            MaxViTAttention.Residual(layer_dim,
+                               WindowedAttention(dim = layer_dim, dim_head = dim_head, dropout = dropout, window_size = w)),
+            MaxViTAttention.Residual(layer_dim,
+                               MaxViTAttention.MLP(dim = layer_dim, dropout = dropout)),
+            Rearrange('b x y w1 w2 d -> b d (x w1) (y w2)'),
+        )
+
+        self.grid_block = nn.Sequential(
+            Rearrange('b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = w, w2 = w),  # grid-like attention
+            MaxViTAttention.Residual(layer_dim,
+                               WindowedAttention(dim = layer_dim, dim_head = dim_head, dropout = dropout, window_size = w)),
+            MaxViTAttention.Residual(layer_dim,
+                               MaxViTAttention.MLP(dim = layer_dim, dropout = dropout)),
+            Rearrange('b x y w1 w2 d -> b d (w1 x) (w2 y)'),
+        )
+
+    def forward(self, x, *args, **kwargs):
+        attn = self.window_block(x)
+        attn = self.grid_block(attn)
+        return x + attn
