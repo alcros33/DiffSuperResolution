@@ -162,3 +162,4 @@ checkpoints/*
 vae_test_logs/*
 test_imgs/*
 run.sh
+config/*
