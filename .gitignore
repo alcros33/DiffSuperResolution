@@ -154,7 +154,6 @@ cython_debug/
 
 
 data/
-face_extractor/
 tensorboard_out/
 results/
 *.pth
@@ -162,3 +161,4 @@ lightning_logs/*
 checkpoints/*
 vae_test_logs/*
 test_imgs/*
+run.sh

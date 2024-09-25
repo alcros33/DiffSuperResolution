@@ -30,7 +30,7 @@ def denorm(img, mean, std):
 
 def random_split(data:list, valid_pct=0.1):
     N = len(data)
-    train_size = int(valid_pct*N)
+    train_size = int((1.0-valid_pct)*N)
     idx = torch.randperm(N)
     train_idx, valid_idx = idx[:train_size], idx[train_size:]
     return [data[i] for i in train_idx], [data[i] for i in valid_idx]

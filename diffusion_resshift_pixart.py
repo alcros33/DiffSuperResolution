@@ -87,9 +87,9 @@ class DiffuserSRResShift(L.LightningModule):
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1,1))
         self.lpips = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
         self.lpips.eval()
-        # self.clipiqa = CLIPImageQualityAssessment()
-        # self.clipiqa.anchors = self.clipiqa.anchors.clone()
-        # self.clipiqa.eval()
+        self.clipiqa = CLIPImageQualityAssessment()
+        self.clipiqa.anchors = self.clipiqa.anchors.clone()
+        self.clipiqa.eval()
 
 
         self.log_batch_low_res = torch.zeros(0, 3, image_size, image_size)
@@ -123,7 +123,7 @@ class DiffuserSRResShift(L.LightningModule):
 
         pred = self.denoiser(xnoise, t, cond)
         ground_truth = encoded_high_res if self.pred_x0 else noise_gt
-        loss = F.l1_loss(pred, ground_truth)
+        loss = F.mse_loss(pred, ground_truth)
         self.log("train_loss", loss)
 
         if self.trainer.is_global_zero and self.log_batch_low_res.shape[0] < 16:
@@ -169,7 +169,8 @@ class DiffuserSRResShift(L.LightningModule):
 
         psnr = self.psnr(pred, self.log_batch_high_res).item()
         ssim = self.ssim(pred, self.log_batch_high_res).item()
-        lpips = self.lpips(pred, self.log_batch_high_res).item()
+        # lpips = self.lpips(pred, self.log_batch_high_res).item()
+        lpips = 0
         self.log_dict({'train_psnr':psnr, 'train_ssim': ssim, 'train_lpips':lpips},
                       rank_zero_only=True)
         gc.collect()
@@ -215,8 +216,9 @@ class DiffuserSRResShift(L.LightningModule):
             
             psnr = self.psnr(pred, high_res).item()
             ssim = self.ssim(pred, high_res).item()
-            lpips = self.lpips(pred, high_res).item()
-            clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
+            # lpips = self.lpips(pred, high_res).item()
+            # clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
+            lpips, clipiqa = 0,0
             self.log_dict({'valid_psnr':psnr, 'hp_metric':psnr,
                         'valid_ssim':ssim, 'valid_lpips':lpips, 'valid_clipiqa':clipiqa},
                         )
@@ -239,7 +241,7 @@ class DiffuserSRResShift(L.LightningModule):
             return pred
     
 def main():
-    checkpoint_callback = ModelCheckpoint(save_top_k=10, every_n_epochs=1, monitor="hp_metric")
+    checkpoint_callback = ModelCheckpoint(save_top_k=10, every_n_train_steps=20_000, monitor="hp_metric")
     trainer_defaults = dict(enable_checkpointing=True, callbacks=[checkpoint_callback],
                             enable_progress_bar=False, log_every_n_steps=5_000)
     
