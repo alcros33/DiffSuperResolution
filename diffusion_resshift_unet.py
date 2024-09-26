@@ -247,7 +247,7 @@ class DiffuserSRResShift(L.LightningModule):
             return pred
     
 def main():
-    checkpoint_callback = ModelCheckpoint(save_top_k=10, every_n_epochs=1, monitor="hp_metric")
+    checkpoint_callback = ModelCheckpoint(save_top_k=10, every_n_train_steps=20_000, monitor="hp_metric")
     trainer_defaults = dict(enable_checkpointing=True, callbacks=[checkpoint_callback],
                             enable_progress_bar=False, log_every_n_steps=5_000)
     
