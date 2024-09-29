@@ -15,7 +15,7 @@ class ResShiftDiffusion(nn.Module):
         super().__init__()
         self.timesteps = timesteps
         self.kappa = kappa
-        sqrt_eta_1  = min(min_noise_level / kappa, min_noise_level, math.sqrt(0.001))
+        sqrt_eta_1  = min(min_noise_level / kappa, min_noise_level)
         b0 = math.exp(1/float(timesteps-1)*math.log(etas_end/sqrt_eta_1))
         base = torch.ones(timesteps)*b0
         beta = ((torch.linspace(0,1,timesteps))**p)*(timesteps-1)
@@ -32,8 +32,10 @@ class ResShiftDiffusion(nn.Module):
         
         self.register_buffer("backward_mean_c1", prev_eta / self.eta)
         self.register_buffer("backward_mean_c2", self.alpha / self.eta)
-        self.register_buffer("backward_std", kappa*torch.sqrt(prev_eta*self.alpha/self.eta))
-
+        self.register_buffer("backward_variance", kappa*kappa*prev_eta*self.alpha/self.eta)
+        self.backward_variance[0] = self.backward_variance[1]
+        self.register_buffer("backward_std", torch.exp(0.5*torch.log(self.backward_variance)))
+    
     
     def add_noise(self, x, y, epsilon, t):
         eta = get_from_idx(self.eta, t)
@@ -50,7 +52,9 @@ class ResShiftDiffusion(nn.Module):
 
         mean = mean_c1*x_t + mean_c2*predicted_x0
 
-        return mean + std*torch.randn_like(x_t)
+        mask = (t!=0).float().reshape(-1, 1, 1, 1)
+
+        return mean + mask*std*torch.randn_like(mean)
     
     def prior_sample(self, y, epsilon):
         t = torch.tensor([self.timesteps-1,] * y.shape[0], device=y.device).long()

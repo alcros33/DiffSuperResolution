@@ -33,11 +33,10 @@ class DiffuserSRResShift(L.LightningModule):
                 lr=1e-4, scheduler_type="one_cycle", warmup_steps=500, img_emb_patch_size=4,
                 vae_chkp="madebyollin/sdxl-vae-fp16-fix", vae_type="vae", pred_x0=True,
                 n_heads=32, image_size=256,
-                use_cross_attn=False,
                 timesteps=15, resshift_p=0.3, kappa=2.0):
         super().__init__()
         self.save_hyperparameters()
-        self.scale_factor = 4
+        self.scale_factor = scale_factor
         self.pred_x0 = pred_x0
         if pred_x0:
             self.sampler = ResShiftDiffusion(timesteps, resshift_p, kappa)
@@ -80,8 +79,8 @@ class DiffuserSRResShift(L.LightningModule):
                                               hidden_size=hidden_size, depth=n_layers, num_heads=n_heads,
                                               pred_sigma=False, mlp_ratio=mlp_ratio, class_dropout_prob=class_dropout_prob, drop_path = drop_path, window_size=window_size, window_block_indexes=window_block_indexes, use_rel_pos=use_rel_pos, img_emb_patch_size=img_emb_patch_size, lewei_scale=lewei_scale)
         
-        # self.ema = swa_utils.AveragedModel(self.denoiser,
-        #                                    multi_avg_fn=swa_utils.get_ema_multi_avg_fn(0.999))
+        self.ema = swa_utils.AveragedModel(self.denoiser,
+                                           multi_avg_fn=swa_utils.get_ema_multi_avg_fn(0.999))
 
         self.psnr = PeakSignalNoiseRatio(data_range=(-1,1))
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1,1))
@@ -96,8 +95,8 @@ class DiffuserSRResShift(L.LightningModule):
         self.log_batch_high_res = torch.zeros(0, 3, image_size, image_size)
         self.log_batch_cond = torch.zeros(0, 3, image_size//self.vae_compresion, image_size//self.vae_compresion) #TODO
     
-    # def on_before_zero_grad(self, *args, **kwargs):
-    #     self.ema.update_parameters(self.unet)
+    def on_before_zero_grad(self, *args, **kwargs):
+        self.ema.update_parameters(self.denoiser)
 
     def training_step(self, batch, batch_idx):
 
