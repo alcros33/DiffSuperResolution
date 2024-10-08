@@ -97,9 +97,9 @@ class DiffuserSRResShift(L.LightningModule):
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1,1))
         self.lpips = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
         self.lpips.eval()
-        # self.clipiqa = CLIPImageQualityAssessment()
-        # self.clipiqa.anchors = self.clipiqa.anchors.clone()
-        # self.clipiqa.eval()
+        self.clipiqa = CLIPImageQualityAssessment()
+        self.clipiqa.anchors = self.clipiqa.anchors.clone()
+        self.clipiqa.eval()
 
         self.log_batch_low_res = torch.zeros(0, 3, image_size, image_size)
         self.log_batch_high_res = torch.zeros(0, 3, image_size, image_size)
@@ -224,10 +224,10 @@ class DiffuserSRResShift(L.LightningModule):
             psnr = self.psnr(pred, high_res).item()
             ssim = self.ssim(pred, high_res).item()
             lpips = self.lpips(pred, high_res).item()
-            # clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
-            clipiqa = 0
+            clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
             self.log_dict({'valid_psnr':psnr, 'hp_metric':psnr,
                         'valid_ssim':ssim, 'valid_lpips':lpips, 'valid_clipiqa':clipiqa},
+                        on_epoch=True
                         )
             gc.collect()
     

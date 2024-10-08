@@ -32,9 +32,10 @@ class ResShiftDiffusion(nn.Module):
         
         self.register_buffer("backward_mean_c1", prev_eta / self.eta)
         self.register_buffer("backward_mean_c2", self.alpha / self.eta)
-        self.register_buffer("backward_variance", kappa*kappa*prev_eta*self.alpha/self.eta)
-        self.backward_variance[0] = self.backward_variance[1]
-        self.register_buffer("backward_std", torch.exp(0.5*torch.log(self.backward_variance)))
+        backward_variance =  kappa*kappa*prev_eta*self.alpha/self.eta
+        backward_variance[0] = backward_variance[1]
+        # self.register_buffer("backward_variance", backward_variance)
+        self.register_buffer("backward_std", torch.exp(0.5*torch.log(backward_variance)))
     
     
     def add_noise(self, x, y, epsilon, t):

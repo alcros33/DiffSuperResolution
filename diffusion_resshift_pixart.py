@@ -79,8 +79,8 @@ class DiffuserSRResShift(L.LightningModule):
                                               hidden_size=hidden_size, depth=n_layers, num_heads=n_heads,
                                               pred_sigma=False, mlp_ratio=mlp_ratio, class_dropout_prob=class_dropout_prob, drop_path = drop_path, window_size=window_size, window_block_indexes=window_block_indexes, use_rel_pos=use_rel_pos, img_emb_patch_size=img_emb_patch_size, lewei_scale=lewei_scale)
         
-        self.ema = swa_utils.AveragedModel(self.denoiser,
-                                           multi_avg_fn=swa_utils.get_ema_multi_avg_fn(0.999))
+        # self.ema = swa_utils.AveragedModel(self.denoiser,
+        #                                    multi_avg_fn=swa_utils.get_ema_multi_avg_fn(0.999))
 
         self.psnr = PeakSignalNoiseRatio(data_range=(-1,1))
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1,1))
@@ -95,8 +95,8 @@ class DiffuserSRResShift(L.LightningModule):
         self.log_batch_high_res = torch.zeros(0, 3, image_size, image_size)
         self.log_batch_cond = torch.zeros(0, 3, image_size//self.vae_compresion, image_size//self.vae_compresion) #TODO
     
-    def on_before_zero_grad(self, *args, **kwargs):
-        self.ema.update_parameters(self.denoiser)
+    # def on_before_zero_grad(self, *args, **kwargs):
+    #     self.ema.update_parameters(self.denoiser)
 
     def training_step(self, batch, batch_idx):
 
@@ -168,9 +168,7 @@ class DiffuserSRResShift(L.LightningModule):
 
         psnr = self.psnr(pred, self.log_batch_high_res).item()
         ssim = self.ssim(pred, self.log_batch_high_res).item()
-        # lpips = self.lpips(pred, self.log_batch_high_res).item()
-        lpips = 0
-        self.log_dict({'train_psnr':psnr, 'train_ssim': ssim, 'train_lpips':lpips},
+        self.log_dict({'train_psnr':psnr, 'train_ssim': ssim},
                       rank_zero_only=True)
         gc.collect()
 
@@ -215,12 +213,11 @@ class DiffuserSRResShift(L.LightningModule):
             
             psnr = self.psnr(pred, high_res).item()
             ssim = self.ssim(pred, high_res).item()
-            # lpips = self.lpips(pred, high_res).item()
-            # clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
-            lpips, clipiqa = 0,0
+            lpips = self.lpips(pred, high_res).item()
+            clipiqa = self.clipiqa(pred*0.5+0.5).mean().item()
             self.log_dict({'valid_psnr':psnr, 'hp_metric':psnr,
                         'valid_ssim':ssim, 'valid_lpips':lpips, 'valid_clipiqa':clipiqa},
-                        )
+                        on_epoch=True)
             gc.collect()
     
     def test_step(self, batch, batch_idx):
