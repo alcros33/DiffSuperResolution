@@ -237,17 +237,18 @@ class DiffuserSRResShift(L.LightningModule):
     def predict_step(self, batch, batch_idx):
         with torch.inference_mode():
             low_res = batch
-            cond = F.interpolate(low_res, scale_factor=self.scale_factor/8.0, mode='bicubic', antialias=True)
+            cond = F.interpolate(low_res,
+                                  scale_factor=float(self.scale_factor)/self.vae_compresion, mode='bicubic', antialias=True)
             up_low_res = F.interpolate(low_res, scale_factor=self.scale_factor,
                                        mode='bicubic', antialias=True).clamp(-1,1)
-            encoded_low_res = self.vae.encode_img(up_low_res, return_dict=False)[0].mode()
+            encoded_low_res = self.vae.encode_img(up_low_res)
             xnoise = self.sampler.prior_sample(encoded_low_res, torch.randn_like(encoded_low_res))
-            pred = self.predict(xnoise, cond)
+            pred = self.predict(xnoise, cond, encoded_low_res)
             pred = self.vae.decode(pred, return_dict=False)[0].clamp(-1, 1)
             return pred
     
 def main():
-    checkpoint_callback = ModelCheckpoint(save_top_k=10, every_n_train_steps=20_000, monitor="hp_metric")
+    checkpoint_callback = ModelCheckpoint(save_top_k=-1, every_n_train_steps=20_000)
     trainer_defaults = dict(enable_checkpointing=True, callbacks=[checkpoint_callback],
                             enable_progress_bar=False, log_every_n_steps=5_000)
     

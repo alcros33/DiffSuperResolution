@@ -228,7 +228,7 @@ class DiffuserSRResShift(L.LightningModule):
             low_res = batch
             up_low_res = F.interpolate(low_res, scale_factor=self.scale_factor,
                                        mode='bicubic', antialias=True).clamp(-1,1)
-            encoded_low_res = self.vae.encode_img(up_low_res, return_dict=False)[0].mode()
+            encoded_low_res = self.vae.encode_img(up_low_res)
             # cond = encoded_low_res # TODO
             cond = F.interpolate(low_res, scale_factor=float(self.scale_factor)/self.vae_compresion, mode='bicubic', antialias=True)
             xnoise = self.sampler.prior_sample(encoded_low_res, torch.randn_like(encoded_low_res))
