@@ -156,10 +156,10 @@ cython_debug/
 data/
 tensorboard_out/
 results/
+results_thermal/
 *.pth
 lightning_logs/*
 checkpoints/*
 vae_test_logs/*
 test_imgs/*
 run.sh
-config/*
